@@ -20,6 +20,7 @@ import base64
 import io
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -371,6 +372,27 @@ def refresh_token():
     return FB_PAGE_ACCESS_TOKEN
 
 
+def get_page_token(user_token, page_id):
+    """Exchange a user token for the Page Access Token of `page_id`.
+
+    The Page token is what's required to publish photos to the Page and to
+    use the Page-linked Instagram account.
+    """
+    resp = requests.get(
+        f"{GRAPH}/me/accounts",
+        params={"access_token": user_token},
+        timeout=30,
+    )
+    data = resp.json()
+    for page in data.get("data", []):
+        if page.get("id") == page_id:
+            print(f"🔑 Got Page Access Token for page {page_id}.")
+            return page["access_token"]
+    raise RuntimeError(
+        f"Page {page_id} not found in /me/accounts. Response: {data}"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Image generation
 # --------------------------------------------------------------------------- #
@@ -567,6 +589,10 @@ def post_to_instagram(token, image_url, caption):
     creation_id = data["id"]
     print(f"📦 Instagram container created. creation_id={creation_id}")
 
+    # Give Instagram time to fetch & process the image before publishing.
+    print("⏳ Waiting for Instagram to process image...")
+    time.sleep(20)
+
     # 2) Publish.
     resp = requests.post(
         f"{GRAPH}/{INSTAGRAM_ACCOUNT_ID}/media_publish",
@@ -601,8 +627,13 @@ def main():
           f"weekday {weekday}, {slot_name} slot")
     print(f"    Hook: {template['hook']}")
 
-    # 2) Refresh token.
+    # 2) Refresh token, then derive the Page Access Token used for all posts.
     token = refresh_token()
+    try:
+        page_token = get_page_token(token, FACEBOOK_PAGE_ID)
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ Could not get Page Access Token: {exc}")
+        sys.exit(1)
 
     # 3) Build image.
     try:
@@ -619,9 +650,9 @@ def main():
         print(f"❌ {exc}")
         sys.exit(1)
 
-    # 5) Post to Facebook + Instagram.
-    fb_ok = post_to_facebook(token, image_url, caption)
-    ig_ok = post_to_instagram(token, image_url, caption)
+    # 5) Post to Facebook + Instagram using the Page Access Token.
+    fb_ok = post_to_facebook(page_token, image_url, caption)
+    ig_ok = post_to_instagram(page_token, image_url, caption)
 
     # 6) Summary.
     print("-" * 64)
