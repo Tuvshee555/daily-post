@@ -12,7 +12,8 @@ On each run, `post.py`:
    7 days × 3 daily runs), so it never repeats the same post twice in a row and
    each week is different.
 3. Renders a 1080×1080 branded image with Pillow (navy→purple gradient + headline).
-4. Uploads the image to catbox.moe (anonymous, no API key) for a public URL.
+4. Commits the image to this repo (`images/`) via the GitHub API and uses its
+   public raw URL — uses the automatic `GITHUB_TOKEN`, no extra secret needed.
 5. Posts the photo to the Facebook Page.
 6. Posts the photo to Instagram (create container → publish).
 7. Logs exactly what was posted and whether it succeeded.
@@ -24,7 +25,9 @@ On each run, `post.py`:
    - `FB_APP_ID`
    - `FB_APP_SECRET`
 
-   (Image hosting uses catbox.moe anonymously — no account or API key needed.)
+   (Image hosting commits to this repo via the automatic `GITHUB_TOKEN` — no
+   extra secret. The repo must be **public** so Facebook/Instagram can fetch the
+   raw image URL.)
 2. The Facebook token must be a **Page token** with `pages_manage_posts` and
    `instagram_content_publish`, and the Instagram account must be a
    Business/Creator account linked to the Page.

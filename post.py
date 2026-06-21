@@ -8,7 +8,7 @@ On each run it:
      (21 slots = 7 days x 3 daily runs, so it never repeats the same
      post twice in a row and each week is different).
   3. Renders a 1080x1080 branded image with Pillow.
-  4. Uploads the image to catbox.moe (anonymous) to get a public URL.
+  4. Commits the image to this GitHub repo and uses its public raw URL.
   5. Posts the photo to the Facebook Page.
   6. Posts the photo to Instagram (create container -> publish).
   7. Logs exactly what happened.
@@ -16,6 +16,7 @@ On each run it:
 Designed to run from GitHub Actions. All credentials come from env vars.
 """
 
+import base64
 import io
 import os
 import sys
@@ -497,21 +498,39 @@ def build_image(hook):
 
 
 # --------------------------------------------------------------------------- #
-# Image hosting (catbox.moe — anonymous, no account/API key)
+# Image hosting (commit to this GitHub repo via the Contents API)
+# Uses the automatic GITHUB_TOKEN in Actions — no extra secret needed.
+# NOTE: the repo must be PUBLIC for Facebook/Instagram to fetch the raw URL,
+# and the workflow needs `permissions: contents: write`.
 # --------------------------------------------------------------------------- #
 def upload_image(image_bytes):
-    """Anonymous catbox.moe upload -> public image URL."""
-    resp = requests.post(
-        "https://catbox.moe/user/api.php",
-        data={"reqtype": "fileupload"},
-        files={"fileToUpload": ("post.png", image_bytes, "image/png")},
+    """Commit the image to the repo and return its public raw URL."""
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()  # e.g. "Tuvshee555/daily-post"
+    if not (token and repo):
+        raise RuntimeError(
+            "GITHUB_TOKEN / GITHUB_REPOSITORY not set "
+            "(both are provided automatically inside GitHub Actions)."
+        )
+
+    content_b64 = base64.b64encode(image_bytes).decode()
+    filename = f"images/post_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.png"
+    url = f"https://api.github.com/repos/{repo}/contents/{filename}"
+
+    resp = requests.put(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        },
+        json={"message": f"Add post image {filename}", "content": content_b64},
         timeout=60,
     )
-    if resp.status_code == 200 and resp.text.startswith("https://"):
-        url = resp.text.strip()
-        print(f"🖼️  Uploaded to catbox.moe: {url}")
-        return url
-    raise RuntimeError(f"Upload failed ({resp.status_code}): {resp.text}")
+    if resp.status_code in (200, 201):
+        raw_url = resp.json()["content"]["download_url"]
+        print(f"🖼️  Committed image to GitHub: {raw_url}")
+        return raw_url
+    raise RuntimeError(f"GitHub upload failed ({resp.status_code}): {resp.text}")
 
 
 # --------------------------------------------------------------------------- #
@@ -593,7 +612,7 @@ def main():
         print(f"❌ Image generation failed: {exc}")
         sys.exit(1)
 
-    # 4) Upload to catbox.moe.
+    # 4) Host the image (commit to the repo, get a public raw URL).
     try:
         image_url = upload_image(image_bytes)
     except Exception as exc:  # noqa: BLE001
