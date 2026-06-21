@@ -8,7 +8,7 @@ On each run it:
      (21 slots = 7 days x 3 daily runs, so it never repeats the same
      post twice in a row and each week is different).
   3. Renders a 1080x1080 branded image with Pillow.
-  4. Uploads the image to Imgur (anonymous) to get a public URL.
+  4. Uploads the image to catbox.moe (anonymous) to get a public URL.
   5. Posts the photo to the Facebook Page.
   6. Posts the photo to Instagram (create container -> publish).
   7. Logs exactly what happened.
@@ -16,7 +16,6 @@ On each run it:
 Designed to run from GitHub Actions. All credentials come from env vars.
 """
 
-import base64
 import io
 import os
 import sys
@@ -40,7 +39,6 @@ GRAPH = f"https://graph.facebook.com/{GRAPH_VERSION}"
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN", "").strip()
 FB_APP_ID = os.environ.get("FB_APP_ID", "").strip()
 FB_APP_SECRET = os.environ.get("FB_APP_SECRET", "").strip()
-IMGUR_CLIENT_ID = os.environ.get("IMGUR_CLIENT_ID", "").strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -499,26 +497,21 @@ def build_image(hook):
 
 
 # --------------------------------------------------------------------------- #
-# Imgur upload
+# Image hosting (catbox.moe — anonymous, no account/API key)
 # --------------------------------------------------------------------------- #
-def upload_to_imgur(image_bytes):
-    """Anonymous Imgur upload -> public image URL."""
-    if not IMGUR_CLIENT_ID:
-        raise RuntimeError("IMGUR_CLIENT_ID is not set.")
-
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
+def upload_image(image_bytes):
+    """Anonymous catbox.moe upload -> public image URL."""
     resp = requests.post(
-        "https://api.imgur.com/3/image",
-        headers={"Authorization": f"Client-ID {IMGUR_CLIENT_ID}"},
-        data={"image": b64, "type": "base64"},
+        "https://catbox.moe/user/api.php",
+        data={"reqtype": "fileupload"},
+        files={"fileToUpload": ("post.png", image_bytes, "image/png")},
         timeout=60,
     )
-    data = resp.json()
-    if resp.status_code == 200 and data.get("success"):
-        url = data["data"]["link"]
-        print(f"🖼️  Uploaded to Imgur: {url}")
+    if resp.status_code == 200 and resp.text.startswith("https://"):
+        url = resp.text.strip()
+        print(f"🖼️  Uploaded to catbox.moe: {url}")
         return url
-    raise RuntimeError(f"Imgur upload failed ({resp.status_code}): {data}")
+    raise RuntimeError(f"Upload failed ({resp.status_code}): {resp.text}")
 
 
 # --------------------------------------------------------------------------- #
@@ -600,9 +593,9 @@ def main():
         print(f"❌ Image generation failed: {exc}")
         sys.exit(1)
 
-    # 4) Upload to Imgur.
+    # 4) Upload to catbox.moe.
     try:
-        image_url = upload_to_imgur(image_bytes)
+        image_url = upload_image(image_bytes)
     except Exception as exc:  # noqa: BLE001
         print(f"❌ {exc}")
         sys.exit(1)
