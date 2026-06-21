@@ -377,20 +377,31 @@ def get_page_token(user_token, page_id):
 
     The Page token is what's required to publish photos to the Page and to
     use the Page-linked Instagram account.
+
+    Falls back to the provided token if the page isn't found in /me/accounts
+    (e.g. the secret already holds a Page token, so /me/accounts is empty) —
+    that way the run works regardless of which token type was stored.
     """
-    resp = requests.get(
-        f"{GRAPH}/me/accounts",
-        params={"access_token": user_token},
-        timeout=30,
-    )
-    data = resp.json()
+    try:
+        resp = requests.get(
+            f"{GRAPH}/me/accounts",
+            params={"access_token": user_token},
+            timeout=30,
+        )
+        data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  /me/accounts request failed: {exc}. "
+              "Using the provided token as-is.")
+        return user_token
+
     for page in data.get("data", []):
         if page.get("id") == page_id:
             print(f"🔑 Got Page Access Token for page {page_id}.")
             return page["access_token"]
-    raise RuntimeError(
-        f"Page {page_id} not found in /me/accounts. Response: {data}"
-    )
+
+    print(f"⚠️  Page {page_id} not found in /me/accounts ({data}). "
+          "Assuming the provided token is already a Page token and using it as-is.")
+    return user_token
 
 
 # --------------------------------------------------------------------------- #

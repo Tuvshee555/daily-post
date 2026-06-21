@@ -1,0 +1,51 @@
+name: Cleanup Old Images
+
+on:
+  schedule:
+    # 1st of every month at 4am UTC
+    - cron: "0 4 1 * *"
+  # Allow manual triggering from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Delete images older than 30 days
+        run: |
+          if [ ! -d images ]; then
+            echo "No images/ folder — nothing to clean."
+            echo "deleted=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          # Filenames look like images/post_YYYYMMDD_HHMMSS.png — derive age
+          # from the embedded date (checkout resets file mtimes, so we can't
+          # rely on -mtime here).
+          cutoff=$(date -u -d '30 days ago' +%Y%m%d)
+          deleted=0
+          for f in images/post_*.png; do
+            [ -e "$f" ] || continue
+            d=$(basename "$f" | sed -E 's/post_([0-9]{8})_.*/\1/')
+            if [ -n "$d" ] && [ "$d" -lt "$cutoff" ]; then
+              echo "Deleting $f (date $d < cutoff $cutoff)"
+              rm -f "$f"
+              deleted=$((deleted + 1))
+            fi
+          done
+          echo "Deleted $deleted image(s) older than 30 days."
+          echo "deleted=$deleted" >> "$GITHUB_ENV"
+
+      - name: Commit removals
+        if: env.deleted != '0'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Cleanup: remove $deleted post image(s) older than 30 days"
+          git push
