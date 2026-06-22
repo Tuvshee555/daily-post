@@ -10,6 +10,9 @@ env/
 sample.png
 *.png
 
+# Last used content angle (local rotation state)
+last_angle.txt
+
 # OS / editor
 .DS_Store
 Thumbs.db
@@ -19,3 +22,5 @@ Thumbs.db
 # Secrets — never commit
 .env
 *.env
+.env.local
+.env.*
