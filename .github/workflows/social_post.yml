@@ -1,10 +1,9 @@
 name: Social Media Auto-Post
 
 on:
-  # Scheduled posting temporarily disabled — re-enable by uncommenting below.
-  # schedule:
-  #   # 9am, 1pm, 6pm UTC every day
-  #   - cron: "0 9,13,18 * * *"
+  schedule:
+    # 9am, 1pm, 6pm UTC every day
+    - cron: "0 9,13,18 * * *"
   # Allow manual triggering from the Actions tab for testing
   workflow_dispatch:
 
