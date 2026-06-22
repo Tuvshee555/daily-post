@@ -49,7 +49,12 @@ GRAPH = f"https://graph.facebook.com/{GRAPH_VERSION}"
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN", "").strip()
 FB_APP_ID = os.environ.get("FB_APP_ID", "").strip()
 FB_APP_SECRET = os.environ.get("FB_APP_SECRET", "").strip()
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+# Accept either name (DEEP_SEEK_KEY is what the local .env / some secrets use).
+DEEPSEEK_API_KEY = (
+    os.environ.get("DEEPSEEK_API_KEY")
+    or os.environ.get("DEEP_SEEK_KEY")
+    or ""
+).strip()
 STABILITY_API_KEY = os.environ.get("STABILITY_API_KEY", "").strip()
 
 # Contact shown on the poster.
