@@ -226,9 +226,11 @@ def generate_image(scene):
     if not STABILITY_API_KEY:
         raise RuntimeError("STABILITY_API_KEY is missing.")
 
-    model = os.environ.get("STABILITY_MODEL", "ultra").lower()
+    # Default to "core" (~3 credits/image ≈ $0.03) — premium quality at a
+    # fraction of Ultra's cost. Override with STABILITY_MODEL=ultra|sd3.5 if needed.
+    model = os.environ.get("STABILITY_MODEL", "core").lower()
     endpoint = {"ultra": "ultra", "core": "core", "sd3.5": "sd3", "sd3": "sd3"}.get(
-        model, "ultra"
+        model, "core"
     )
     url = f"https://api.stability.ai/v2beta/stable-image/generate/{endpoint}"
 
