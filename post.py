@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Sello AI — social media auto-poster (AI-generated content).
+Sello AI — social media auto-poster (AI-generated, high-end design).
 
 On each run it:
   1. Refreshes the FB token (long-lived exchange).
   2. Picks a fresh content angle (rotating, never the same as last run).
-  3. Asks DeepSeek to write the hook + caption + image prompt in
-     Mongolian Cyrillic (no hardcoded templates — fresh every run).
-  4. Generates a 1024x1024 image with Stability AI from the AI image prompt,
-     then overlays the Mongolian hook + brand with Pillow (Stability can't
-     render Cyrillic text reliably, so the headline is composited on top).
+  3. Asks DeepSeek to write structured copy in Mongolian Cyrillic — headline,
+     subhead, CTA, full caption, and a textless image scene (fresh every run,
+     no hardcoded templates).
+  4. Generates a clean, TEXTLESS premium illustration with Stability AI
+     (v2beta), then composites a real designed poster on top with Pillow:
+     full-bleed hero + white card, Montserrat headline/subhead, blue CTA pill,
+     brand lockup and contact. Text is always crisp + correctly Mongolian.
   5. Commits the image to this GitHub repo and uses its public raw URL.
   6. Posts the photo to the Facebook Page.
   7. Posts the photo to Instagram (create container -> publish).
@@ -30,7 +32,7 @@ from datetime import datetime, timezone
 
 import requests
 from openai import OpenAI
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 # --------------------------------------------------------------------------- #
 # Hardcoded account IDs
@@ -50,6 +52,8 @@ FB_APP_SECRET = os.environ.get("FB_APP_SECRET", "").strip()
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 STABILITY_API_KEY = os.environ.get("STABILITY_API_KEY", "").strip()
 
+# Contact shown on the poster.
+CONTACT_PHONE = "+976 8618 5769"
 
 # --------------------------------------------------------------------------- #
 # AI content generation (DeepSeek)
@@ -74,8 +78,9 @@ ANGLES = [
 ]
 
 SYSTEM_PROMPT = """
-You are a social media content creator for Sello AI — an AI sales chatbot
-for Mongolian online shops. You only write in Mongolian (Cyrillic).
+You are a senior social media creative director for Sello AI — an AI sales
+chatbot for Mongolian online shops. You write ONLY in flawless, natural
+Mongolian (Cyrillic). Never use English in the output copy.
 
 Business context:
 - Sello AI answers Facebook Messenger and Instagram DM messages automatically 24/7
@@ -86,11 +91,15 @@ Business context:
 - 14 day free trial available
 - Contact: +976 8618 5769
 - CTA always: "БОТ" гэж мессеж бичээрэй 👇
-- Brand: deep blue #2563EB, clean modern SaaS style
+- Brand: deep blue #2563EB, clean modern premium SaaS style
 
-Post structure always: Pain → Solution → Result → CTA
-Keep captions short, punchy, emotional. Use emojis. Line breaks between points.
+Voice: confident, premium, warm, concrete. Short punchy sentences. No fluff,
+no clichés, no ALL CAPS shouting. Speak directly to a busy shop owner.
+
+Post structure always: Pain → Solution → Result → CTA.
 Hashtags in Mongolian: #SelloAI #ОнлайнДэлгүүр #AIБот #ЦахимХудалдаа #ЖижигБизнес
+Every hashtag must be ONE word with NO spaces inside it (write #ГооСайхан,
+never #Гоо сайхан). You may add one relevant single-word hashtag for the shop type.
 """.strip()
 
 
@@ -119,23 +128,51 @@ def pick_angle():
     return angle
 
 
+def _fix_hashtag_lines(caption):
+    """Repair hashtags broken across a space (#Гоо сайхан -> #Гоосайхан).
+
+    Only touches lines that begin with '#', so caption prose is untouched.
+    """
+    out = []
+    for line in caption.split("\n"):
+        if line.strip().startswith("#"):
+            merged = []
+            for tok in line.split():
+                if tok.startswith("#") or not merged:
+                    merged.append(tok)
+                else:  # a stray word that belongs to the previous hashtag
+                    merged[-1] += tok
+            out.append(" ".join(merged))
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def generate_content(angle):
-    """Ask DeepSeek for hook + caption + image_prompt as JSON (Mongolian)."""
+    """Ask DeepSeek for structured Mongolian copy + a textless image scene."""
     if not DEEPSEEK_API_KEY:
         raise RuntimeError("DEEPSEEK_API_KEY is missing.")
 
     client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
     user_prompt = (
-        f'Use this angle for the post: "{angle}".\n\n'
-        "Write:\n"
-        "1. hook: short headline for image (in Mongolian, max 8 words)\n"
-        "2. caption: full post caption with emojis and hashtags\n"
-        "3. image_prompt: English description for image generation using this style: "
-        '"Clean modern flat illustration, white background, deep blue #2563EB accent '
-        'only, square 1:1, Mongolian character style, premium SaaS marketing look, '
-        'no watermark, [specific scene]"\n\n'
-        'Return as JSON: {"hook": "...", "caption": "...", "image_prompt": "..."}'
+        f'Create one premium social post for this angle: "{angle}".\n\n'
+        "Return JSON with these fields (all copy in Mongolian Cyrillic, no English):\n"
+        '- "headline": the poster headline. Bold, emotional, max 6 words. NO emojis.\n'
+        '- "subhead": one supporting benefit line for the poster, max 10 words. '
+        "NO emojis.\n"
+        '- "cta": short button text for the poster, max 4 words (e.g. '
+        '\'"БОТ" гэж бичээрэй\'). NO emojis.\n'
+        '- "caption": the full post caption. Pain → Solution → Result → CTA, '
+        "with emojis, line breaks between points, end with the CTA "
+        '\'"БОТ" гэж мессеж бичээрэй 👇\' and then the Mongolian hashtags.\n'
+        '- "image_scene": an ENGLISH description of ONLY the visual subject/scene '
+        "for an illustration (e.g. 'a happy Mongolian shoe shop owner checking "
+        "phone notifications, stylized shoes on shelves, a friendly chat bubble'). "
+        "Describe subject and action only. NO text, NO letters, NO words, NO logos, "
+        "NO style words — just the scene.\n\n"
+        'Output ONLY valid JSON: {"headline": "...", "subhead": "...", '
+        '"cta": "...", "caption": "...", "image_scene": "..."}'
     )
 
     resp = client.chat.completions.create(
@@ -147,86 +184,141 @@ def generate_content(angle):
         response_format={"type": "json_object"},
         temperature=1.1,
     )
-    raw = resp.choices[0].message.content
-    data = json.loads(raw)
+    data = json.loads(resp.choices[0].message.content)
 
-    hook = (data.get("hook") or "").strip()
-    caption = (data.get("caption") or "").strip()
-    image_prompt = (data.get("image_prompt") or "").strip()
-    if not (hook and caption and image_prompt):
+    content = {
+        "headline": (data.get("headline") or "").strip(),
+        "subhead": (data.get("subhead") or "").strip(),
+        "cta": (data.get("cta") or "").strip() or '"БОТ" гэж бичээрэй',
+        "caption": _fix_hashtag_lines((data.get("caption") or "").strip()),
+        "image_scene": (data.get("image_scene") or "").strip(),
+    }
+    if not (content["headline"] and content["caption"] and content["image_scene"]):
         raise RuntimeError(f"DeepSeek returned incomplete content: {data}")
 
-    return hook, caption, image_prompt
+    return content
 
 
 # --------------------------------------------------------------------------- #
-# Image generation (Stability AI) + Mongolian hook overlay
+# Image generation (Stability AI v2beta) — clean, TEXTLESS hero illustration
 # --------------------------------------------------------------------------- #
-SIZE = 1024
-BRAND = "Sello AI"
-ACCENT = (37, 99, 235)  # #2563EB deep blue
+SIZE = 1080
+
+# Fixed art direction appended to every scene so all posts share one premium,
+# consistent brand look.
+STYLE_SUFFIX = (
+    "clean modern flat vector illustration, premium SaaS marketing style, "
+    "deep blue (#2563EB) and white color palette with soft sky-blue accents, "
+    "lots of negative space, soft studio lighting, subtle long shadows, "
+    "rounded geometric shapes, friendly and professional, elegant, minimal, "
+    "high-end, crisp, highly detailed, centered balanced composition"
+)
+NEGATIVE_PROMPT = (
+    "text, letters, words, numbers, captions, typography, watermark, logo, "
+    "signature, ui mockup, buttons, frame, border, low quality, blurry, jpeg "
+    "artifacts, deformed, distorted, cluttered, busy background, extra fingers, "
+    "ugly, messy, oversaturated"
+)
 
 
-def generate_image(image_prompt):
-    """Generate a 1024x1024 image with Stability AI and return PNG bytes."""
+def generate_image(scene):
+    """Generate a clean textless 1:1 illustration and return PNG bytes."""
     if not STABILITY_API_KEY:
         raise RuntimeError("STABILITY_API_KEY is missing.")
 
-    resp = requests.post(
-        "https://api.stability.ai/v1/generation/"
-        "stable-diffusion-xl-1024-v1-0/text-to-image",
-        headers={
-            "Authorization": f"Bearer {STABILITY_API_KEY}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        json={
-            "text_prompts": [{"text": image_prompt, "weight": 1}],
-            "cfg_scale": 7,
-            "height": 1024,
-            "width": 1024,
-            "samples": 1,
-            "steps": 30,
-        },
-        timeout=120,
+    model = os.environ.get("STABILITY_MODEL", "ultra").lower()
+    endpoint = {"ultra": "ultra", "core": "core", "sd3.5": "sd3", "sd3": "sd3"}.get(
+        model, "ultra"
     )
-    if resp.status_code != 200:
-        raise RuntimeError(f"Stability API failed ({resp.status_code}): {resp.text}")
+    url = f"https://api.stability.ai/v2beta/stable-image/generate/{endpoint}"
 
-    artifacts = resp.json().get("artifacts", [])
-    if not artifacts:
-        raise RuntimeError(f"Stability API returned no artifacts: {resp.text}")
+    prompt = f"{scene}. {STYLE_SUFFIX}"
+    data = {
+        "prompt": prompt,
+        "negative_prompt": NEGATIVE_PROMPT,
+        "aspect_ratio": "1:1",
+        "output_format": "png",
+    }
+    if endpoint == "sd3":
+        data["model"] = "sd3.5-large"
+    if endpoint == "core":
+        data["style_preset"] = "digital-art"
 
-    return base64.b64decode(artifacts[0]["base64"])
+    resp = requests.post(
+        url,
+        headers={
+            "authorization": f"Bearer {STABILITY_API_KEY}",
+            "accept": "image/*",
+        },
+        files={"none": ""},  # forces multipart/form-data
+        data=data,
+        timeout=180,
+    )
+    if resp.status_code == 200:
+        return resp.content
+    raise RuntimeError(f"Stability API failed ({resp.status_code}): {resp.text[:500]}")
 
 
-def _load_font(size, bold=True):
-    """Load a TrueType font with Cyrillic support, trying common paths."""
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
-        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold
-        else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
-        "arialbd.ttf" if bold else "arial.ttf",
-    ]
-    for path in candidates:
-        try:
-            return ImageFont.truetype(path, size)
-        except (OSError, IOError):
-            continue
-    return ImageFont.load_default()
+# --------------------------------------------------------------------------- #
+# Typography (Montserrat — full Cyrillic — fetched + cached once)
+# --------------------------------------------------------------------------- #
+FONT_URL = (
+    "https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/"
+    "Montserrat%5Bwght%5D.ttf"
+)
+FONT_PATH = "fonts/Montserrat.ttf"
 
 
-def _wrap_text(draw, text, font, max_width):
+def _font_path():
+    """Download + cache the Montserrat variable font, return its local path."""
+    if not os.path.exists(FONT_PATH):
+        os.makedirs("fonts", exist_ok=True)
+        resp = requests.get(FONT_URL, timeout=60)
+        resp.raise_for_status()
+        with open(FONT_PATH, "wb") as fh:
+            fh.write(resp.content)
+    return FONT_PATH
+
+
+def _font(size, weight=700):
+    """Load Montserrat at a given size + weight (100-900)."""
+    font = ImageFont.truetype(_font_path(), size)
+    try:
+        font.set_variation_by_axes([weight])
+    except Exception:  # noqa: BLE001 — static fallback if variable axes unsupported
+        pass
+    return font
+
+
+# --------------------------------------------------------------------------- #
+# Poster composition
+# --------------------------------------------------------------------------- #
+BRAND = "Sello AI"
+NAVY = (15, 23, 42)        # #0F172A
+GRAY = (71, 85, 105)       # #475569
+BLUE = (37, 99, 235)       # #2563EB
+LIGHT_BLUE = (219, 234, 254)  # #DBEAFE
+WHITE = (255, 255, 255)
+
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF"
+    "\U00002190-\U000021FF\U00002B00-\U00002BFF\U0000FE00-\U0000FE0F]+",
+    flags=re.UNICODE,
+)
+
+
+def _clean(text):
+    """Strip emoji/symbols the font can't render, collapse whitespace."""
+    return re.sub(r"\s+", " ", _EMOJI_RE.sub("", text)).strip()
+
+
+def _wrap(draw, text, font, max_width):
     """Greedy word-wrap to fit max_width."""
     words = text.split()
-    lines = []
-    current = ""
+    lines, current = [], ""
     for word in words:
         trial = f"{current} {word}".strip()
-        w = draw.textbbox((0, 0), trial, font=font)[2]
-        if w <= max_width or not current:
+        if draw.textbbox((0, 0), trial, font=font)[2] <= max_width or not current:
             current = trial
         else:
             lines.append(current)
@@ -236,73 +328,145 @@ def _wrap_text(draw, text, font, max_width):
     return lines
 
 
-_EMOJI_RE = re.compile(
-    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF"
-    "\U00002190-\U000021FF\U00002B00-\U00002BFF\U0000FE00-\U0000FE0F]+",
-    flags=re.UNICODE,
-)
+def _cover(img, w, h):
+    """Resize+crop an image to exactly fill w x h (object-fit: cover)."""
+    src_ratio = img.width / img.height
+    dst_ratio = w / h
+    if src_ratio > dst_ratio:
+        new_h = h
+        new_w = int(h * src_ratio)
+    else:
+        new_w = w
+        new_h = int(w / src_ratio)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    left = (new_w - w) // 2
+    top = (new_h - h) // 2
+    return img.crop((left, top, left + w, top + h))
 
 
-def _strip_emoji(text):
-    """Remove emoji/symbols the headline font can't render (caption keeps them)."""
-    return _EMOJI_RE.sub("", text).strip()
+def _text_h(draw, font):
+    return draw.textbbox((0, 0), "Аг", font=font)[3]
 
 
-def compose_image(base_png, hook):
-    """Overlay the Mongolian hook + brand bar onto the AI-generated image."""
-    hook = _strip_emoji(hook)
-    img = Image.open(io.BytesIO(base_png)).convert("RGB")
-    if img.size != (SIZE, SIZE):
-        img = img.resize((SIZE, SIZE))
-    draw = ImageDraw.Draw(img, "RGBA")
+def compose_poster(base_png, headline, subhead, cta):
+    """Composite a premium poster: hero image + white card with crisp copy."""
+    headline = _clean(headline)
+    subhead = _clean(subhead)
+    cta = _clean(cta)
 
-    margin = 70
-    max_width = SIZE - 2 * margin
+    canvas = Image.new("RGB", (SIZE, SIZE), WHITE)
 
-    # Pick a headline font size that fits in the lower band.
-    font_size = 76
-    while font_size >= 42:
-        font = _load_font(font_size, bold=True)
-        lines = _wrap_text(draw, hook, font, max_width)
-        line_h = draw.textbbox((0, 0), "Аг", font=font)[3] + 16
-        total_h = line_h * len(lines)
-        if len(lines) <= 4 and total_h <= SIZE * 0.32:
-            break
-        font_size -= 6
+    # --- Hero illustration fills the top, full-bleed. --------------------- #
+    hero_h = 648
+    hero = _cover(Image.open(io.BytesIO(base_png)).convert("RGB"), SIZE, hero_h)
+    canvas.paste(hero, (0, 0))
 
-    brand_font = _load_font(40, bold=True)
-    brand_h = draw.textbbox((0, 0), BRAND, font=brand_font)[3]
+    # --- White card with a rounded top lip overlapping the hero. ---------- #
+    card_top = hero_h - 36
+    # Soft shadow above the card lip for lift.
+    shadow = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    sdraw = ImageDraw.Draw(shadow)
+    sdraw.rounded_rectangle(
+        [0, card_top - 6, SIZE, SIZE], radius=44, fill=(15, 23, 42, 70)
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(14))
+    canvas.paste(shadow, (0, 0), shadow)
 
-    # Dark band across the bottom for guaranteed text legibility.
-    band_h = total_h + brand_h + margin + 80
-    band_top = SIZE - band_h
-    draw.rectangle([0, band_top, SIZE, SIZE], fill=(8, 12, 30, 200))
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    draw.rounded_rectangle([0, card_top, SIZE, SIZE + 60], radius=44, fill=WHITE)
 
-    # Accent bar above the headline.
-    accent_y = band_top + 40
+    pad = 76
+    max_w = SIZE - 2 * pad
+
+    # --- Brand lockup chip over the hero (top-left). ---------------------- #
+    chip_font = _font(34, weight=700)
+    chip_label_w = draw.textbbox((0, 0), BRAND, font=chip_font)[2]
+    chip_h, dot_r = 64, 9
+    chip_w = 34 + dot_r * 2 + 14 + chip_label_w + 30
+    chip = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    cdraw = ImageDraw.Draw(chip)
+    cdraw.rounded_rectangle(
+        [40, 40, 40 + chip_w, 40 + chip_h], radius=chip_h // 2, fill=(15, 23, 42, 165)
+    )
+    cy = 40 + chip_h // 2
+    cdraw.ellipse(
+        [40 + 26, cy - dot_r, 40 + 26 + dot_r * 2, cy + dot_r], fill=(96, 165, 250)
+    )
+    cdraw.text(
+        (40 + 26 + dot_r * 2 + 14, cy), BRAND, font=chip_font, fill=WHITE,
+        anchor="lm",
+    )
+    canvas.paste(chip, (0, 0), chip)
+
+    # --- CTA pill (anchored to the bottom). ------------------------------- #
+    cta_font = _font(33, weight=700)
+    ctab = draw.textbbox((0, 0), cta, font=cta_font)
+    cta_w, cta_h = ctab[2] - ctab[0], ctab[3] - ctab[1]
+    pill_h = 76
+    pill_w = cta_w + 70
+    pill_x0, pill_y0 = pad, SIZE - pad - pill_h
     draw.rounded_rectangle(
-        [margin, accent_y, margin + 110, accent_y + 12],
-        radius=6, fill=ACCENT,
+        [pill_x0, pill_y0, pill_x0 + pill_w, pill_y0 + pill_h],
+        radius=pill_h // 2, fill=BLUE,
+    )
+    draw.text(
+        (pill_x0 + pill_w // 2, pill_y0 + pill_h // 2), cta,
+        font=cta_font, fill=WHITE, anchor="mm",
     )
 
-    # Headline text.
-    y = accent_y + 36
-    for line in lines:
-        draw.text((margin, y), line, font=font, fill=(255, 255, 255))
-        y += line_h
+    # --- "14 хоног үнэгүй" tag next to the CTA. --------------------------- #
+    tag_text = "14 хоног үнэгүй"
+    tag_font = _font(27, weight=600)
+    tagb = draw.textbbox((0, 0), tag_text, font=tag_font)
+    tag_w = tagb[2] - tagb[0] + 44
+    tag_x0 = pill_x0 + pill_w + 20
+    if tag_x0 + tag_w <= SIZE - pad:
+        draw.rounded_rectangle(
+            [tag_x0, pill_y0, tag_x0 + tag_w, pill_y0 + pill_h],
+            radius=pill_h // 2, fill=LIGHT_BLUE,
+        )
+        draw.text(
+            (tag_x0 + tag_w // 2, pill_y0 + pill_h // 2), tag_text,
+            font=tag_font, fill=BLUE, anchor="mm",
+        )
 
-    # Brand dot + name at the very bottom.
-    dot_r = 12
-    brand_y = SIZE - margin - brand_h
-    draw.ellipse(
-        [margin, brand_y + 4, margin + 2 * dot_r, brand_y + 4 + 2 * dot_r],
-        fill=ACCENT,
-    )
-    draw.text((margin + 2 * dot_r + 18, brand_y), BRAND,
-              font=brand_font, fill=(255, 255, 255))
+    # --- Headline + subhead, adaptively sized to fit the card. ------------ #
+    text_top = card_top + 64
+    text_bottom = pill_y0 - 28
+    avail_h = text_bottom - text_top
+
+    head_size = 60
+    while head_size >= 38:
+        head_font = _font(head_size, weight=800)
+        head_lines = _wrap(draw, headline, head_font, max_w)
+        head_lh = int(_text_h(draw, head_font) * 1.18) + 8
+
+        sub_lines, sub_lh = [], 0
+        if subhead:
+            sub_font = _font(max(24, int(head_size * 0.5)), weight=500)
+            sub_lines = _wrap(draw, subhead, sub_font, max_w)
+            sub_lh = int(_text_h(draw, sub_font) * 1.25) + 4
+
+        total = head_lh * len(head_lines)
+        if sub_lines:
+            total += 18 + sub_lh * len(sub_lines)
+
+        if len(head_lines) <= 3 and len(sub_lines) <= 2 and total <= avail_h:
+            break
+        head_size -= 4
+
+    y = text_top
+    for line in head_lines:
+        draw.text((pad, y), line, font=head_font, fill=NAVY)
+        y += head_lh
+    if sub_lines:
+        y += 18
+        for line in sub_lines:
+            draw.text((pad, y), line, font=sub_font, fill=GRAY)
+            y += sub_lh
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    canvas.save(buf, format="PNG")
     return buf.getvalue()
 
 
@@ -478,12 +642,14 @@ def main():
     angle = pick_angle()
     print(f"🎯 Angle: {angle}")
     try:
-        hook, caption, image_prompt = generate_content(angle)
+        content = generate_content(angle)
     except Exception as exc:  # noqa: BLE001
         print(f"❌ Content generation failed: {exc}")
         sys.exit(1)
-    print(f"📝 Hook: {hook}")
-    print(f"🖌️  Image prompt: {image_prompt}")
+    print(f"📝 Headline: {content['headline']}")
+    print(f"   Subhead : {content['subhead']}")
+    print(f"   CTA     : {content['cta']}")
+    print(f"🖌️  Scene   : {content['image_scene']}")
 
     # 2) Refresh token, then derive the Page Access Token used for all posts.
     token = refresh_token()
@@ -493,11 +659,13 @@ def main():
         print(f"❌ Could not get Page Access Token: {exc}")
         sys.exit(1)
 
-    # 3) Generate image with Stability AI, then overlay the Mongolian hook.
+    # 3) Generate textless hero with Stability, then compose the poster.
     try:
-        base_png = generate_image(image_prompt)
-        image_bytes = compose_image(base_png, hook)
-        print(f"🎨 Image generated ({len(image_bytes)} bytes).")
+        base_png = generate_image(content["image_scene"])
+        image_bytes = compose_poster(
+            base_png, content["headline"], content["subhead"], content["cta"]
+        )
+        print(f"🎨 Poster composed ({len(image_bytes)} bytes).")
     except Exception as exc:  # noqa: BLE001
         print(f"❌ Image generation failed: {exc}")
         sys.exit(1)
@@ -510,14 +678,14 @@ def main():
         sys.exit(1)
 
     # 5) Post to Facebook + Instagram using the Page Access Token.
-    fb_ok = post_to_facebook(page_token, image_url, caption)
-    ig_ok = post_to_instagram(page_token, image_url, caption)
+    fb_ok = post_to_facebook(page_token, image_url, content["caption"])
+    ig_ok = post_to_instagram(page_token, image_url, content["caption"])
 
     # 6) Summary.
     print("-" * 64)
     print("SUMMARY")
     print(f"  Angle    : {angle}")
-    print(f"  Hook     : {hook}")
+    print(f"  Headline : {content['headline']}")
     print(f"  Image    : {image_url}")
     print(f"  Facebook : {'OK ✅' if fb_ok else 'FAILED ❌'}")
     print(f"  Instagram: {'OK ✅' if ig_ok else 'FAILED ❌'}")
